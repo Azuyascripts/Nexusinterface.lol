@@ -1,0 +1,557 @@
+-- =================================================================
+-- NEXUS ENGINE v6.4 | AUTO PLATFORM DETECTION (MOBILE/PC) 🛸
+-- =================================================================
+if _G.NexusEngineRunning then _G.NexusEngineRunning = false task.wait(0.2) end
+_G.NexusEngineRunning = true
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local Camera = workspace.CurrentCamera
+local lp = Players.LocalPlayer
+
+_G.LockAll = false
+_G.ESPEnabled = true
+_G.FlickEnabled = true
+_G.AntiFlingEnabled = true
+_G.DesiredSpeed = 16
+_G.DesiredJump = 50
+_G.SafeAutoFarm = false
+_G.TargetPart = "HumanoidRootPart"
+
+-- Detect if user is on Mobile vs PC
+local isMobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+
+local flickSpeeds = {
+    ["Normal"] = 0.18,
+    ["Half Fast"] = 0.12,
+    ["Fast"] = 0.06,
+    ["Tryhard"] = 0.03,
+    ["Lightning"] = 0.01
+}
+_G.FlickSpeedMode = "Fast"
+
+local NexusGreen = Color3.fromRGB(0, 255, 65)
+local initialSheriff = nil
+local lastDroppedGunPos = nil
+local detectedHeroPlayer = nil
+
+local coreGui = pcall(function() return game:GetService("CoreGui") end) and game:GetService("CoreGui") or lp:WaitForChild("PlayerGui")
+for _, ui in ipairs(coreGui:GetChildren()) do
+    if ui.Name == "NEXUSFloatingUI" or ui.Name == "NEXUS_LoaderUI" or ui.Name == "NEXUS_UFOToggle" then ui:Destroy() end
+end
+
+-- =================================================================
+-- TOUCH BLOCK & DRAGGABLE UTILITY
+-- =================================================================
+local function makeTouchSafeDraggable(btn)
+    btn.Active = true
+    local dragging, dragStart, startPos = false, nil, nil
+    btn.InputBegan:Connect(function(input)
+        if _G.LockAll then return end
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragStart = input.Position startPos = btn.Position dragging = true
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if _G.LockAll then dragging = false return end
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - dragStart
+            btn.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then dragging = false end
+    end)
+end
+
+-- =================================================================
+-- UFO BUTTON TOGGLE
+-- =================================================================
+local UFOGui = Instance.new("ScreenGui", coreGui)
+UFOGui.Name = "NEXUS_UFOToggle"
+UFOGui.ResetOnSpawn = false
+
+local UFOBtn = Instance.new("TextButton", UFOGui)
+UFOBtn.Size = UDim2.new(0, 52, 0, 52)
+UFOBtn.Position = UDim2.new(0, 15, 0, 100)
+UFOBtn.BackgroundColor3 = Color3.fromRGB(20, 25, 30)
+UFOBtn.Text = "🛸"
+UFOBtn.TextSize = 26
+UFOBtn.Visible = true
+UFOBtn.Active = true
+
+Instance.new("UICorner", UFOBtn).CornerRadius = UDim.new(0, 12)
+local ufoStroke = Instance.new("UIStroke", UFOBtn)
+ufoStroke.Color = NexusGreen
+ufoStroke.Thickness = 2
+
+makeTouchSafeDraggable(UFOBtn)
+
+UFOBtn.Activated:Connect(function()
+    VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.RightShift, false, game)
+    task.wait(0.05)
+    VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.RightShift, false, game)
+end)
+
+-- =================================================================
+-- FLOATING COMBAT HUD
+-- =================================================================
+local ScreenGui = Instance.new("ScreenGui", coreGui)
+ScreenGui.Name = "NEXUSFloatingUI"
+ScreenGui.ResetOnSpawn = false
+
+local TimerBox = Instance.new("Frame", ScreenGui)
+TimerBox.Size = UDim2.new(0, 110, 0, 26)
+TimerBox.Position = UDim2.new(0.5, -55, 0, 6)
+TimerBox.BackgroundColor3 = Color3.fromRGB(5, 15, 5)
+TimerBox.Active = true
+Instance.new("UIStroke", TimerBox).Color = NexusGreen
+
+local TimerText = Instance.new("TextLabel", TimerBox)
+TimerText.Size = UDim2.new(1, 0, 1, 0)
+TimerText.BackgroundTransparency = 1
+TimerText.TextColor3 = NexusGreen
+TimerText.Font = Enum.Font.Code
+TimerText.TextSize = 11
+TimerText.Text = "TIME: --:--"
+
+local function createFloatingButton(config)
+    config = config or {}
+    local btn = Instance.new("TextButton")
+    btn.Name = config.Name or "BUTTON"
+    btn.Parent = ScreenGui
+    btn.Visible = true
+    btn.Active = true
+    btn.Size = config.Size or UDim2.new(0, 75, 0, 75)
+    btn.Position = config.Position or UDim2.new(0.5, 0, 0.5, 0)
+    btn.BackgroundColor3 = Color3.fromRGB(5, 15, 5)
+    btn.Text = string.upper(config.Text or "BUTTON")
+    btn.TextColor3 = NexusGreen
+    btn.Font = Enum.Font.Code
+    btn.TextSize = 11
+    Instance.new("UIStroke", btn).Color = NexusGreen
+    return btn
+end
+
+local ShootBtn = createFloatingButton({ Name = "ShootButton", Text = "SHOOT", Position = UDim2.new(1, -170, 1, -160), Size = UDim2.new(0, 110, 0, 35) })
+local ThrowBtn = createFloatingButton({ Name = "ThrowButton", Text = "THROW", Position = UDim2.new(1, -175, 1, -95), Size = UDim2.new(0, 55, 0, 55) })
+
+makeTouchSafeDraggable(ShootBtn)
+makeTouchSafeDraggable(ThrowBtn)
+
+-- =================================================================
+-- COMBAT ENGINE & TWEEN FLICK
+-- =================================================================
+local function getMurderer()
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= lp then
+            if (p:FindFirstChild("Backpack") and p.Backpack:FindFirstChild("Knife")) or (p.Character and p.Character:FindFirstChild("Knife")) then
+                return p
+            end
+        end
+    end
+    return nil
+end
+
+local function executeTweenFlick(targetPos, actionCallback)
+    if not _G.FlickEnabled then
+        if actionCallback then actionCallback() end
+        return
+    end
+
+    local duration = flickSpeeds[_G.FlickSpeedMode] or 0.06
+    local targetCFrame = CFrame.new(Camera.CFrame.Position, targetPos)
+
+    Camera.CameraType = Enum.CameraType.Scriptable
+    local tween = TweenService:Create(Camera, TweenInfo.new(duration, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {CFrame = targetCFrame})
+    tween:Play()
+    tween.Completed:Wait()
+
+    if actionCallback then actionCallback() end
+    task.wait(0.02)
+    Camera.CameraType = Enum.CameraType.Custom
+end
+
+local function fireGun()
+    local char = lp.Character 
+    local hum = char and char:FindFirstChild("Humanoid")
+    if not hum then return end
+    local gun = char:FindFirstChild("Gun") or lp.Backpack:FindFirstChild("Gun")
+    local murd = getMurderer()
+    if gun and murd and murd.Character then
+        local targetPart = murd.Character:FindFirstChild(_G.TargetPart) or murd.Character.HumanoidRootPart
+        if targetPart then
+            if gun.Parent ~= char then hum:EquipTool(gun) end
+            local targetPos = targetPart.Position + (targetPart.AssemblyLinearVelocity * 0.12)
+            executeTweenFlick(targetPos, function()
+                local remote = gun:FindFirstChild("Shoot") or ReplicatedStorage:FindFirstChild("ShootGun", true)
+                if remote then remote:FireServer(CFrame.lookAt(targetPart.Position, targetPos), CFrame.new(targetPos)) end
+                gun:Activate()
+            end)
+            task.delay(0.2, function()
+                if gun and gun.Parent == char and lp:FindFirstChild("Backpack") then
+                    gun.Parent = lp.Backpack
+                end
+            end)
+        end
+    end
+end
+
+local function throwAction()
+    local char = lp.Character if not char then return end
+    local knife = char:FindFirstChild("Knife") or lp.Backpack:FindFirstChild("Knife")
+    local near, dist = nil, math.huge
+    for _, v in pairs(Players:GetPlayers()) do
+        if v ~= lp and v.Character and v.Character:FindFirstChild("HumanoidRootPart") then
+            local d = (char.HumanoidRootPart.Position - v.Character.HumanoidRootPart.Position).Magnitude
+            if d < dist then dist = d near = v end
+        end
+    end
+    if knife and near and near.Character:FindFirstChild("HumanoidRootPart") then
+        local targetPart = near.Character:FindFirstChild(_G.TargetPart) or near.Character.HumanoidRootPart
+        local hum = char:FindFirstChild("Humanoid")
+        if hum and knife.Parent == lp.Backpack then hum:EquipTool(knife) end
+        local targetPos = targetPart.Position
+        executeTweenFlick(targetPos, function()
+            local remote = (knife:FindFirstChild("Events") and knife.Events:FindFirstChild("KnifeThrown")) or knife:FindFirstChild("KnifeThrown")
+            if remote then
+                remote:FireServer({CFrame.new(char.HumanoidRootPart.Position, targetPos) * CFrame.Angles(1.453, 0.044, 1.65), CFrame.new(targetPos)})
+            else
+                knife:Activate()
+            end
+        end)
+        task.delay(0.2, function()
+            if knife and knife.Parent == char and lp:FindFirstChild("Backpack") then
+                knife.Parent = lp.Backpack
+            end
+        end)
+    end
+end
+
+ShootBtn.MouseButton1Click:Connect(fireGun)
+ThrowBtn.MouseButton1Click:Connect(throwAction)
+
+-- =================================================================
+-- ANTI-FLING SYSTEM
+-- =================================================================
+RunService.Heartbeat:Connect(function()
+    if _G.AntiFlingEnabled and lp.Character then
+        for _, pl in ipairs(Players:GetPlayers()) do
+            if pl ~= lp and pl.Character and pl.Character:FindFirstChild("HumanoidRootPart") then
+                local hrp = pl.Character.HumanoidRootPart
+                if hrp.AssemblyAngularVelocity.Magnitude > 40 or hrp.AssemblyLinearVelocity.Magnitude > 80 then
+                    for _, part in ipairs(pl.Character:GetDescendants()) do
+                        if part:IsA("BasePart") then
+                            part.CanCollide = false
+                        end
+                    end
+                end
+            end
+        end
+    end
+end)
+
+-- =================================================================
+-- HERO DETECTION, DROPPED GUN ESP & ROLE HIGHLIGHTS
+-- =================================================================
+local function isPhysicalDroppedGun(obj)
+    if not obj then return false end
+    if obj.Name == "GunDrop" or obj.Name == "Gun" then
+        if obj:IsA("BasePart") or obj:IsA("Model") then
+            return true
+        end
+    end
+    return false
+end
+
+task.spawn(function()
+    while _G.NexusEngineRunning do
+        pcall(function()
+            local t = workspace:FindFirstChild("RoundTimerPart", true)
+            if t and t.SurfaceGui and t.SurfaceGui.Timer then
+                local currentText = t.SurfaceGui.Timer.Text
+                if string.find(string.lower(currentText), "10") or string.find(string.lower(currentText), "map") or string.find(string.lower(currentText), "voting") then
+                    initialSheriff = nil
+                    detectedHeroPlayer = nil
+                    lastDroppedGunPos = nil
+                end
+            end
+        end)
+        task.wait(1)
+    end
+end)
+
+task.spawn(function()
+    while _G.NexusEngineRunning do
+        if _G.ESPEnabled then
+            local droppedGun = nil
+            for _, item in ipairs(workspace:GetChildren()) do
+                if isPhysicalDroppedGun(item) then
+                    droppedGun = item
+                    break
+                end
+            end
+            if not droppedGun then
+                local g = workspace:FindFirstChild("GunDrop", true)
+                if g and isPhysicalDroppedGun(g) then droppedGun = g end
+            end
+
+            if droppedGun then
+                local adornee = droppedGun:IsA("Model") and (droppedGun.PrimaryPart or droppedGun:FindFirstChildOfClass("BasePart")) or droppedGun
+                if adornee then
+                    lastDroppedGunPos = adornee.Position
+
+                    local gunHl = droppedGun:FindFirstChild("NEXUS_GunHighlight") or Instance.new("Highlight", droppedGun)
+                    gunHl.Name = "NEXUS_GunHighlight"
+                    gunHl.FillColor = NexusGreen
+                    gunHl.OutlineColor = Color3.fromRGB(255, 255, 255)
+                    gunHl.Enabled = true
+
+                    local bill = adornee:FindFirstChild("NEXUS_GunBill") or Instance.new("BillboardGui", adornee)
+                    bill.Name = "NEXUS_GunBill"
+                    bill.Adornee = adornee
+                    bill.Size = UDim2.new(0, 140, 0, 40)
+                    bill.AlwaysOnTop = true
+                    bill.ExtentsOffset = Vector3.new(0, 1.8, 0)
+
+                    local lbl = bill:FindFirstChild("TextLabel") or Instance.new("TextLabel", bill)
+                    lbl.Size = UDim2.new(1, 0, 1, 0)
+                    lbl.BackgroundTransparency = 1
+                    lbl.Font = Enum.Font.Code
+                    lbl.TextSize = 12
+                    lbl.Text = "DROPPED GUN\n▼"
+                    lbl.TextColor3 = NexusGreen
+                    lbl.TextStrokeTransparency = 0
+                    bill.Enabled = true
+                end
+            elseif lastDroppedGunPos and not detectedHeroPlayer then
+                for _, p in ipairs(Players:GetPlayers()) do
+                    if p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                        local dist = (p.Character.HumanoidRootPart.Position - lastDroppedGunPos).Magnitude
+                        if dist <= 6 then
+                            detectedHeroPlayer = p
+                            break
+                        end
+                    end
+                end
+            end
+
+            if not initialSheriff then
+                for _, p in ipairs(Players:GetPlayers()) do
+                    local bp = p:FindFirstChild("Backpack")
+                    local hasGun = (bp and bp:FindFirstChild("Gun")) or (p.Character and p.Character:FindFirstChild("Gun"))
+                    if hasGun and not lastDroppedGunPos then
+                        initialSheriff = p
+                        break
+                    end
+                end
+            end
+
+            for _, p in ipairs(Players:GetPlayers()) do
+                if p ~= lp and p.Character and p.Character:FindFirstChild("Head") then
+                    local char = p.Character
+                    local head = char.Head
+                    
+                    local hl = char:FindFirstChild("NEXUS_Highlight") or Instance.new("Highlight", char)
+                    hl.Name = "NEXUS_Highlight"
+                    hl.FillTransparency = 0.3
+                    hl.OutlineTransparency = 0
+
+                    local bp = p:FindFirstChild("Backpack")
+                    local hasKnife = (bp and bp:FindFirstChild("Knife")) or char:FindFirstChild("Knife")
+                    local hasGun = (bp and bp:FindFirstChild("Gun")) or char:FindFirstChild("Gun")
+                    
+                    local roleName, roleColor = "INNOCENT", NexusGreen
+                    if hasKnife then
+                        roleName, roleColor = "MURDERER", Color3.fromRGB(255, 30, 30)
+                    elseif p == detectedHeroPlayer or (hasGun and p ~= initialSheriff and lastDroppedGunPos) then
+                        roleName, roleColor = "HERO", Color3.fromRGB(255, 235, 0)
+                    elseif p == initialSheriff or (hasGun and not lastDroppedGunPos) then
+                        roleName, roleColor = "SHERIFF", Color3.fromRGB(30, 140, 255)
+                    end
+                    
+                    hl.FillColor = roleColor
+                    hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+                    hl.Enabled = true
+
+                    local bill = head:FindFirstChild("NEXUS_Bill") or Instance.new("BillboardGui", head)
+                    bill.Name = "NEXUS_Bill"
+                    bill.Adornee = head
+                    bill.Size = UDim2.new(0, 140, 0, 40)
+                    bill.AlwaysOnTop = true
+                    bill.ExtentsOffset = Vector3.new(0, 2.5, 0)
+
+                    local lbl = bill:FindFirstChild("TextLabel") or Instance.new("TextLabel", bill)
+                    lbl.Size = UDim2.new(1, 0, 1, 0)
+                    lbl.BackgroundTransparency = 1
+                    lbl.Font = Enum.Font.Code
+                    lbl.TextSize = 13
+                    lbl.Text = roleName .. "\n▼"
+                    lbl.TextColor3 = roleColor
+                    lbl.TextStrokeTransparency = 0
+                    bill.Enabled = true
+                end
+            end
+        else
+            for _, p in ipairs(Players:GetPlayers()) do
+                if p.Character then
+                    if p.Character:FindFirstChild("NEXUS_Highlight") then p.Character.NEXUS_Highlight.Enabled = false end
+                    if p.Character:FindFirstChild("Head") and p.Character.Head:FindFirstChild("NEXUS_Bill") then
+                        p.Character.Head.NEXUS_Bill.Enabled = false
+                    end
+                end
+            end
+        end
+        task.wait(0.2)
+    end
+end)
+
+task.spawn(function()
+    while _G.NexusEngineRunning do
+        pcall(function()
+            local t = workspace:FindFirstChild("RoundTimerPart", true)
+            TimerText.Text = "TIME: " .. (t and t.SurfaceGui.Timer.Text or "LOBBY")
+        end)
+        task.wait(0.5)
+    end
+end)
+
+RunService.RenderStepped:Connect(function()
+    if _G.NexusEngineRunning and lp.Character and lp.Character:FindFirstChild("Humanoid") then
+        if _G.DesiredSpeed ~= 16 then lp.Character.Humanoid.WalkSpeed = _G.DesiredSpeed end
+        if _G.DesiredJump ~= 50 then lp.Character.Humanoid.JumpPower = _G.DesiredJump end
+    end
+end)
+
+-- =================================================================
+-- UI LOADERS (AUTO-DETECTING MOBILE VS PC FOR RAYFIELD)
+-- =================================================================
+local function loadOrion()
+    local OrionLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/jensonhirst/Orion/main/source"))()
+    local Window = OrionLib:MakeWindow({ Name = "Nexus Engine v6.4", HidePremium = true, SaveConfig = false, IntroText = "NEXUS MATRIX" })
+    
+    local CombatTab = Window:MakeTab({ Name = "Combat", Icon = "rbxassetid://4483362458" })
+    local ProtectionTab = Window:MakeTab({ Name = "Protection", Icon = "rbxassetid://4483362458" })
+    local MovementTab = Window:MakeTab({ Name = "Movement", Icon = "rbxassetid://4483362458" })
+    local CreditsTab = Window:MakeTab({ Name = "Credits", Icon = "rbxassetid://4483362458" })
+
+    CombatTab:AddToggle({ Name = "Enable ESP & Roles", Default = true, Callback = function(v) _G.ESPEnabled = v end })
+    CombatTab:AddToggle({ Name = "Auto Flick Enabled", Default = true, Callback = function(v) _G.FlickEnabled = v end })
+    CombatTab:AddDropdown({
+        Name = "Flick Speed Mode",
+        Default = "Fast",
+        Options = {"Normal", "Half Fast", "Fast", "Tryhard", "Lightning"},
+        Callback = function(v) _G.FlickSpeedMode = v end
+    })
+    CombatTab:AddToggle({ Name = "Lock Floating Buttons", Default = false, Callback = function(v) _G.LockAll = v end })
+    CombatTab:AddButton({ Name = "Shoot Murderer", Callback = fireGun })
+    CombatTab:AddButton({ Name = "Throw Knife", Callback = throwAction })
+
+    ProtectionTab:AddToggle({ Name = "Enable Anti-Fling", Default = true, Callback = function(v) _G.AntiFlingEnabled = v end })
+
+    MovementTab:AddSlider({ Name = "Walk Speed", Min = 16, Max = 150, Default = 16, Increment = 1, ValueName = "Speed", Callback = function(v) _G.DesiredSpeed = v end })
+    MovementTab:AddSlider({ Name = "Jump Power", Min = 50, Max = 200, Default = 50, Increment = 1, ValueName = "Jump", Callback = function(v) _G.DesiredJump = v end })
+    MovementTab:AddToggle({ Name = "Safe Coin Farm", Default = false, Callback = function(v) _G.SafeAutoFarm = v end })
+
+    CreditsTab:AddParagraph("Developers", "this was made by two developers xd")
+    OrionLib:Init()
+end
+
+local function loadRayfield()
+    local Rayfield = loadstring(game:HttpGet("https://raw.githubusercontent.com/UI-Interface/CustomFIeld/main/RayField.lua"))()
+    
+    local platformTitle = isMobile and "Nexus Matrix v6.4 [Mobile Mode]" | "Nexus Matrix v6.4 [PC Mode]"
+    
+    local Window = Rayfield:CreateWindow({ 
+        Name = platformTitle, 
+        LoadingTitle = isMobile and "Optimizing for Mobile Touch..." | "Loading Desktop Engine...",
+        ConfigurationSaving = { Enabled = false } 
+    })
+    
+    local CombatTab = Window:CreateTab("Combat & ESP", 4483362458)
+    local MovementTab = Window:CreateTab("Movement & Farm", 4483362458)
+    local CreditsTab = Window:CreateTab("Credits", 4483362458)
+
+    CombatTab:CreateToggle({ Name = "Enable ESP & Roles", CurrentValue = true, Flag = "ESP_R", Callback = function(v) _G.ESPEnabled = v end })
+    CombatTab:CreateToggle({ Name = "Auto Flick Enabled", CurrentValue = true, Flag = "Flick_R", Callback = function(v) _G.FlickEnabled = v end })
+    CombatTab:CreateToggle({ Name = "Anti-Fling Protection", CurrentValue = true, Flag = "AF_R", Callback = function(v) _G.AntiFlingEnabled = v end })
+    CombatTab:CreateDropdown({
+        Name = "Flick Speed Mode",
+        Options = {"Normal", "Half Fast", "Fast", "Tryhard", "Lightning"},
+        CurrentOption = "Fast",
+        Flag = "FlickSpeed_R",
+        Callback = function(v) _G.FlickSpeedMode = v end
+    })
+    CombatTab:CreateButton({ Name = "Shoot Murderer", Callback = fireGun })
+    CombatTab:CreateButton({ Name = "Throw Knife", Callback = throwAction })
+
+    MovementTab:CreateSlider({ Name = "Walk Speed", Range = {16, 150}, Increment = 1, CurrentValue = 16, Flag = "Spd_R", Callback = function(v) _G.DesiredSpeed = v end })
+    MovementTab:CreateSlider({ Name = "Jump Power", Range = {50, 200}, Increment = 1, CurrentValue = 50, Flag = "Jmp_R", Callback = function(v) _G.DesiredJump = v end })
+
+    CreditsTab:CreateLabel("this was made by two developers xd")
+end
+
+local function loadRedline()
+    local Redline = loadstring(game:HttpGet("https://raw.githubusercontent.com/xHeptc/Kavo-UI-Library/main/source.lua"))()
+    local Window = Redline.CreateLib("Nexus Engine v6.4", "BloodTheme")
+    
+    local CombatTab = Window:NewTab("Combat & ESP")
+    local CombatSection = CombatTab:NewSection("Combat Controls")
+    CombatSection:NewToggle("Enable ESP & Roles", "Highlights roles", function(v) _G.ESPEnabled = v end)
+    CombatSection:NewToggle("Auto Flick Enabled", "Flicks camera to target", function(v) _G.FlickEnabled = v end, true)
+    CombatSection:NewToggle("Anti-Fling Protection", "Blocks flinging", function(v) _G.AntiFlingEnabled = v end, true)
+    CombatSection:NewDropdown("Flick Speed Mode", "Choose flick speed", {"Normal", "Half Fast", "Fast", "Tryhard", "Lightning"}, function(selected) _G.FlickSpeedMode = selected end)
+    CombatSection:NewButton("Shoot Murderer", "Fires gun", fireGun)
+    CombatSection:NewButton("Throw Knife", "Throws knife", throwAction)
+
+    local MovementTab = Window:NewTab("Movement")
+    local MoveSection = MovementTab:NewSection("Character Speeds")
+    MoveSection:NewSlider("Walk Speed", "Adjust speed", 150, 16, function(v) _G.DesiredSpeed = v end)
+    MoveSection:NewSlider("Jump Power", "Adjust jump", 200, 50, function(v) _G.DesiredJump = v end)
+end
+
+-- Universal Selection Screen
+local LoaderGui = Instance.new("ScreenGui", coreGui)
+LoaderGui.Name = "NEXUS_LoaderUI"
+LoaderGui.ResetOnSpawn = false
+
+local LoaderFrame = Instance.new("Frame", LoaderGui)
+LoaderFrame.Size = UDim2.new(0, 300, 0, 230)
+LoaderFrame.Position = UDim2.new(0.5, -150, 0.5, -115)
+LoaderFrame.BackgroundColor3 = Color3.fromRGB(5, 15, 5)
+LoaderFrame.Active = true
+Instance.new("UIStroke", LoaderFrame).Color = NexusGreen
+
+local LoaderTitle = Instance.new("TextLabel", LoaderFrame)
+LoaderTitle.Size = UDim2.new(1, 0, 0, 30)
+LoaderTitle.BackgroundColor3 = Color3.fromRGB(10, 30, 10)
+LoaderTitle.Text = isMobile and "MOBILE MODE DETECTED" or "PC DESKTOP DETECTED"
+LoaderTitle.TextColor3 = NexusGreen
+LoaderTitle.Font = Enum.Font.Code
+LoaderTitle.TextSize = 11
+
+local function createLoaderBtn(text, posY, callback)
+    local btn = Instance.new("TextButton", LoaderFrame)
+    btn.Size = UDim2.new(0.85, 0, 0, 32)
+    btn.Position = UDim2.new(0.075, 0, 0, posY)
+    btn.BackgroundColor3 = Color3.fromRGB(10, 25, 10)
+    btn.Text = text
+    btn.TextColor3 = NexusGreen
+    btn.Font = Enum.Font.Code
+    btn.TextSize = 11
+    btn.Active = true
+    Instance.new("UIStroke", btn).Color = NexusGreen
+    btn.Activated:Connect(function()
+        LoaderGui:Destroy()
+        callback()
+    end)
+end
+
+createLoaderBtn("🌌 ORION UI (Recommended)", 45, loadOrion)
+createLoaderBtn("⚡ RAYFIELD UI (Auto-Detect Platform)", 90, loadRayfield)
+createLoaderBtn("🔴 REDLINE UI (Blood Theme)", 135, loadRedline)
+createLoaderBtn("❌ CLOSE LOADER", 180, function() end)
